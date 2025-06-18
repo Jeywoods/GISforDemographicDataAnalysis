@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>ГИС для анализа демографических данных</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            margin: 0;
+            font-family: sans-serif;
+            background: #f9f9f9;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        header {
+            background-color: #4c69ba;
+            color: white;
+            padding: 16px;
+            width: 100%;
+            text-align: center;
+            font-size: 24px;
+            font-weight: bold;
+        }
+
+        .content {
+            max-width: 900px;
+            width: 100%;
+            padding: 16px;
+            position: relative;
+        }
+
+        #map {
+            height: 80vh;
+            width: 100%;
+            border-radius: 12px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.2);
+            position: relative;
+        }
+
+        #mapLegend {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            z-index: 1000;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 10px 12px;
+            border-radius: 6px;
+            font-size: 13px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+            line-height: 1.4;
+        }
+
+        .controls {
+            margin-bottom: 16px;
+        }
+
+        table {
+            width: 100%;
+            margin-top: 16px;
+            border-collapse: collapse;
+            background: #fff;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 0 6px rgba(0, 0, 0, 0.1);
+        }
+
+        th, td {
+            padding: 8px 12px;
+            text-align: left;
+            border-bottom: 1px solid #eee;
+        }
+
+        th {
+            background: #f0f0f0;
+        }
+
+        #metricModal {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #fff;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            padding: 20px;
+            display: none;
+            z-index: 9999;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        }
+
+        #metricModal select, #metricModal button {
+            margin-top: 10px;
+        }
+
+        #chartContainer {
+            margin-top: 20px;
+            width: 100%;
+        }
+    </style>
+</head>
+<body>
+<header>ГИС для анализа демографических данных</header>
+<div class="content">
+    <div class="controls">
+        <label for="indicator">Выберите показатель: </label>
+        <select id="indicator">
+            <option value="pop25">Население</option>
+            <option value="urbanization_rate">Уровень урбанизации (%)</option>
+            <option value="dens25">Плотность населения</option>
+        </select>
+    </div>
+
+    <div id="map">
+        <div id="mapLegend"></div> <!-- Легенда ВНУТРИ карты -->
+    </div>
+
+    <div id="table"></div>
+
+    <div id="metricModal">
+        <p><strong id="regionName"></strong></p>
+        <label for="metricSelect">Метрика:</label>
+        <select id="metricSelect">
+            <option value="nat_pop">Естественный прирост</option>
+        </select>
+        <button id="showChart">Показать график</button>
+    </div>
+
+    <div id="chartContainer">
+        <canvas id="metricChart" width="800" height="300"></canvas>
+        <div id="yearTable"></div>
+    </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+    const indicatorSelect = document.getElementById("indicator");
+    const map = L.map('map').setView([61.5, 90], 3.5);
+    const metricModal = document.getElementById("metricModal");
+    const regionName = document.getElementById("regionName");
+    const showChartBtn = document.getElementById("showChart");
+    const metricChartCanvas = document.getElementById("metricChart");
+    const yearTable = document.getElementById("yearTable");
+    let selectedFeature = null;
+    let chart;
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap'
+    }).addTo(map);
+
+    let geojsonLayer;
+    let geoData = [];
+
+    fetch("http://localhost:8000/geojson")
+        .then(res => res.json())
+        .then(data => {
+            geoData = data.features;
+            updateMap();
+            updateLegend(indicatorSelect.value); // ВАЖНО: вызвать легенду при старте
+        });
+
+    indicatorSelect.addEventListener("change", () => {
+        updateMap();
+        updateLegend(indicatorSelect.value); // Обновлять при переключении
+    });
+
+    function updateMap() {
+        if (geojsonLayer) geojsonLayer.remove();
+        const selectedIndicator = indicatorSelect.value;
+
+        geojsonLayer = L.geoJSON({ type: "FeatureCollection", features: geoData }, {
+            style: feature => {
+                const value = feature.properties[selectedIndicator] || 0;
+                return {
+                    fillColor: getColor(value, selectedIndicator),
+                    weight: 1,
+                    color: "#999",
+                    fillOpacity: 0.7
+                };
+            },
+            onEachFeature: (feature, layer) => {
+                const name = feature.properties.region || feature.properties.NameRegion || "?";
+                const value = feature.properties[selectedIndicator] || 0;
+                layer.bindTooltip(`${name}: ${value}`, { sticky: true });
+                layer.on('click', () => {
+                    selectedFeature = feature;
+                    regionName.textContent = name;
+                    metricModal.style.display = "block";
+                });
+            }
+        }).addTo(map);
+    }
+
+    function getColor(value, indicator) {
+        if (value === 0) return "#ffffff";
+        if (indicator === "urbanization_rate") {
+            if (value <= 50) return "#ccffcc";
+            if (value <= 60) return "#99cc99";
+            if (value <= 70) return "#669966";
+            if (value <= 80) return "#336633";
+            if (value <= 90) return "#1f401f";
+            return "#0d260d";
+        } else if (indicator === "pop25") {
+            if (value <= 200000) return "#ffcccc";
+            if (value <= 600000) return "#ff9999";
+            if (value <= 1000000) return "#ff6666";
+            if (value <= 1500000) return "#ff3333";
+            if (value <= 4000000) return "#cc0000";
+            return "#990000";
+        } else if (indicator === "dens25") {
+            if (value <= 2000) return "#cce5ff";
+            if (value <= 10000) return "#99ccff";
+            if (value <= 35000) return "#6699ff";
+            if (value <= 70000) return "#3366cc";
+            return "#663399";
+        }
+        return "#ffffff";
+    }
+
+    function updateLegend(indicator) {
+        const legend = document.getElementById("mapLegend");
+        let html = "<strong>Легенда</strong><br><br>";
+
+        const addRow = (color, label) => {
+            html += `<div style="display: flex; align-items: center; margin-bottom: 4px;">
+                <div style="width: 14px; height: 14px; background: ${color}; margin-right: 8px; border: 1px solid #999;"></div>
+                <span>${label}</span>
+            </div>`;
+        };
+
+        if (indicator === "urbanization_rate") {
+            addRow("#ccffcc", "≤ 50%");
+            addRow("#99cc99", "≤ 60%");
+            addRow("#669966", "≤ 70%");
+            addRow("#336633", "≤ 80%");
+            addRow("#1f401f", "≤ 90%");
+            addRow("#0d260d", "> 90%");
+        } else if (indicator === "pop25") {
+            addRow("#ffcccc", "≤ 200 тыс.");
+            addRow("#ff9999", "≤ 600 тыс.");
+            addRow("#ff6666", "≤ 1 млн");
+            addRow("#ff3333", "≤ 1.5 млн");
+            addRow("#cc0000", "≤ 4 млн");
+            addRow("#990000", "> 4 млн");
+        } else if (indicator === "dens25") {
+            addRow("#cce5ff", "≤ 2 тыс.");
+            addRow("#99ccff", "≤ 10 тыс.");
+            addRow("#6699ff", "≤ 35 тыс.");
+            addRow("#3366cc", "≤ 70 тыс.");
+            addRow("#663399", "> 70 тыс.");
+        }
+
+        legend.innerHTML = html;
+    }
+
+    showChartBtn.addEventListener("click", () => {
+        if (!selectedFeature) return;
+        const props = selectedFeature.properties;
+        const years = [2021, 2022, 2023, 2024];
+        const values = years.map(y => props[`nat_pop${String(y).slice(2)}`] || 0);
+
+        if (chart) chart.destroy();
+        chart = new Chart(metricChartCanvas.getContext("2d"), {
+            type: "line",
+            data: {
+                labels: years,
+                datasets: [{
+                    label: "Естественный прирост",
+                    data: values,
+                    borderColor: "#4c69ba",
+                    backgroundColor: "rgba(76, 105, 186, 0.2)",
+                    borderWidth: 2,
+                    tension: 0.4,
+                    fill: true
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: { legend: { position: 'top' } }
+            }
+        });
+
+        let tableHTML = '<table><thead><tr><th>Год</th><th>Прирост</th></tr></thead><tbody>';
+        for (let i = 0; i < years.length; i++) {
+            tableHTML += `<tr><td>${years[i]}</td><td>${values[i]}</td></tr>`;
+        }
+        tableHTML += '</tbody></table>';
+        yearTable.innerHTML = tableHTML;
+
+        metricModal.style.display = "none";
+    });
+</script>
+</body>
+</html>
