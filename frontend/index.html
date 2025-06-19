@@ -111,7 +111,15 @@
             <option value="pop25">Население</option>
             <option value="urbanization_rate">Уровень урбанизации (%)</option>
             <option value="dens25">Плотность населения</option>
-        </select>
+            <option value="birth25">Рождаемость</option>
+            <option value="mortal25">Смертность</option>
+            <option value="birth_rate_coef">Коэффициент рождаемости</option>
+            <option value="nat_inc24">Естественный прирост</option>
+            <option value="mig_inc24">Миграционный прирост</option>
+            <option value="tot_inc24">Общий прирост</option>
+            <option value="sex_diff">Разница между женщинами и мужчинами</option>
+</select>
+
     </div>
 
     <div id="map">
@@ -119,20 +127,35 @@
     </div>
 
     <div id="table"></div>
+    <!-- Сюда под карту, перед <div id="table"></div> -->
+    <button id="showDataTable" style="display: block; margin: 20px auto 0 auto; padding: 10px 24px; font-size: 16px; border-radius: 6px; background: #4c69ba; color: #fff; border: none; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.07);">
+        Показать таблицу данных
+    </button>
+    <div id="indicatorYearNote" style="display:none; color:#444; font-size:17px; font-weight:500; text-align:center; margin:10px 0 0 0;"></div>
+
 
     <div id="metricModal">
         <p><strong id="regionName"></strong></p>
         <label for="metricSelect">Метрика:</label>
         <select id="metricSelect">
-            <option value="nat_pop">Естественный прирост</option>
+            <option value="nat_inc">Естественный прирост</option>
+            <option value="mig_inc">Миграционный прирост</option>
+            <option value="tot_inc">Общий прирост</option>
+            <option value="ur_pop">Городское население</option>
+            <option value="rur_pop">Сельское население</option>
+            <option value="male">Численность мужчин</option>
+            <option value="female">Численность женщин</option>
+            <option value="birth">Рождаемость</option>
+            <option value="mortal">Смертность</option>
         </select>
         <button id="showChart">Показать график</button>
     </div>
 
     <div id="chartContainer">
-        <canvas id="metricChart" width="800" height="300"></canvas>
-        <div id="yearTable"></div>
-    </div>
+    <div id="chartRegionName" style="margin-bottom: 10px; font-size: 20px; font-weight: bold; text-align: center;"></div>
+    <canvas id="metricChart" width="800" height="300"></canvas>
+    <div id="yearTable"></div>
+</div>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -161,6 +184,14 @@
             geoData = data.features;
             updateMap();
             updateLegend(indicatorSelect.value); // ВАЖНО: вызвать легенду при старте
+            if (growthIndicators.includes(indicatorSelect.value)) {
+            indicatorYearNote.style.display = "block";
+            indicatorYearNote.textContent = "Данные за 2024 год";
+        } else {
+            indicatorYearNote.style.display = "none";
+            indicatorYearNote.textContent = "";
+        }
+
         });
 
     indicatorSelect.addEventListener("change", () => {
@@ -173,125 +204,358 @@
         const selectedIndicator = indicatorSelect.value;
 
         geojsonLayer = L.geoJSON({ type: "FeatureCollection", features: geoData }, {
-            style: feature => {
-                const value = feature.properties[selectedIndicator] || 0;
-                return {
-                    fillColor: getColor(value, selectedIndicator),
-                    weight: 1,
-                    color: "#999",
-                    fillOpacity: 0.7
-                };
-            },
-            onEachFeature: (feature, layer) => {
-                const name = feature.properties.region || feature.properties.NameRegion || "?";
-                const value = feature.properties[selectedIndicator] || 0;
-                layer.bindTooltip(`${name}: ${value}`, { sticky: true });
-                layer.on('click', () => {
-                    selectedFeature = feature;
-                    regionName.textContent = name;
-                    metricModal.style.display = "block";
-                });
-            }
-        }).addTo(map);
+    style: feature => {
+        let value;
+        if (indicatorSelect.value === "sex_diff") {
+        value = (feature.properties["female25"] || 0) - (feature.properties["male25"] || 0);
+        } else if (indicatorSelect.value === "birth_rate_coef") {
+            // Коэффициент рождаемости = birth25 / mortal25
+            const birth = Number(feature.properties["birth25"] || 0);
+            const mortal = Number(feature.properties["mortal25"] || 0);
+            value = mortal > 0 ? +(birth / mortal).toFixed(2) : 0;
+        } else {
+            value = feature.properties[indicatorSelect.value] || 0;
+        }
+        return {
+            fillColor: getColor(value, indicatorSelect.value),
+            weight: 1,
+            color: "#999",
+            fillOpacity: 0.7
+        };
+    },
+    onEachFeature: (feature, layer) => {
+        const name = feature.properties.region || feature.properties.NameRegion || "?";
+        let value;
+        if (indicatorSelect.value === "birth_rate_coef") {
+            const birth = Number(feature.properties["birth25"] || 0);
+            const mortal = Number(feature.properties["mortal25"] || 0);
+            value = mortal > 0 ? +(birth / mortal).toFixed(2) : 0;
+        } else {
+            value = feature.properties[indicatorSelect.value] || 0;
+        }
+        layer.bindTooltip(`${name}: ${value}`, { sticky: true });
+        layer.on('click', () => {
+            selectedFeature = feature;
+            regionName.textContent = name;
+            metricModal.style.display = "block";
+        });
+    }
+}).addTo(map);
+
     }
 
     function getColor(value, indicator) {
+    // 1. Белый цвет для нулевых значений
+    if (value === 0) return "#ffffff";
+
+    if (indicator === "sex_diff") {
+    // Шкала: отрицательные — мужчин больше, положительные — женщин больше
+        if (value < -25000) return "#1565c0";
+        if (value < -10000) return "#42a5f5";
+        if (value < -1000)  return "#90caf9";
+        if (value < 1000)   return "#f5f5f5"; // почти поровну
+        if (value < 10000)  return "#ffb6b6";
+        if (value < 25000)  return "#ff7f7f";
+        return "#d32f2f"; // женщин гораздо больше
+}
+
+    // 2. Кастомная шкала для birth25 (рождаемость)
+    if (indicator === "birth25") {
         if (value === 0) return "#ffffff";
-        if (indicator === "urbanization_rate") {
-            if (value <= 50) return "#ccffcc";
-            if (value <= 60) return "#99cc99";
-            if (value <= 70) return "#669966";
-            if (value <= 80) return "#336633";
-            if (value <= 90) return "#1f401f";
-            return "#0d260d";
-        } else if (indicator === "pop25") {
-            if (value <= 200000) return "#ffcccc";
-            if (value <= 600000) return "#ff9999";
-            if (value <= 1000000) return "#ff6666";
-            if (value <= 1500000) return "#ff3333";
-            if (value <= 4000000) return "#cc0000";
-            return "#990000";
-        } else if (indicator === "dens25") {
-            if (value <= 2000) return "#cce5ff";
-            if (value <= 10000) return "#99ccff";
-            if (value <= 35000) return "#6699ff";
-            if (value <= 70000) return "#3366cc";
-            return "#663399";
-        }
-        return "#ffffff";
+        if (value <= 17523) return "#d0e6f6";     // ≤ 17 523
+        if (value <= 35009) return "#90caf9";     // ≤ 35 009
+        if (value <= 52495) return "#42a5f5";     // ≤ 52 495
+        if (value <= 69981) return "#1e88e5";     // ≤ 69 981
+        if (value <= 87467) return "#1565c0";     // ≤ 87 467
+        return "#0d47a1";                         // > 87 467
     }
+
+    // 3. Кастомные шкалы для других метрик — по аналогии!
+    if (["mortal25", "birth_rate_coef", "nat_inc25", "mig_inc25", "tot_inc25"].includes(indicator)) {
+        // Пример: можешь добавить свои интервалы
+        if (value <= 0) return "#f5f5f5";
+        if (value <= 5) return "#d0e6f6";
+        if (value <= 10) return "#90caf9";
+        if (value <= 15) return "#42a5f5";
+        if (value <= 20) return "#1e88e5";
+        if (value <= 30) return "#1565c0";
+        return "#0d47a1";
+    }
+
+    // 4. Остальные метрики — без изменений
+    if (indicator === "urbanization_rate") {
+        if (value <= 50) return "#ccffcc";
+        if (value <= 60) return "#99cc99";
+        if (value <= 70) return "#669966";
+        if (value <= 80) return "#336633";
+        if (value <= 90) return "#1f401f";
+        return "#0d260d";
+    } else if (indicator === "pop25") {
+        if (value <= 200000) return "#ffcccc";
+        if (value <= 600000) return "#ff9999";
+        if (value <= 1000000) return "#ff6666";
+        if (value <= 1500000) return "#ff3333";
+        if (value <= 4000000) return "#cc0000";
+        return "#990000";
+    } else if (indicator === "dens25") {
+        if (value <= 2000) return "#cce5ff";
+        if (value <= 10000) return "#99ccff";
+        if (value <= 35000) return "#6699ff";
+        if (value <= 70000) return "#3366cc";
+        return "#663399";
+    }
+    return "#ffffff";
+}
+
+
 
     function updateLegend(indicator) {
-        const legend = document.getElementById("mapLegend");
-        let html = "<strong>Легенда</strong><br><br>";
+    const legend = document.getElementById("mapLegend");
+    let html = "<strong>Легенда</strong><br><br>";
 
-        const addRow = (color, label) => {
-            html += `<div style="display: flex; align-items: center; margin-bottom: 4px;">
-                <div style="width: 14px; height: 14px; background: ${color}; margin-right: 8px; border: 1px solid #999;"></div>
-                <span>${label}</span>
-            </div>`;
-        };
+    const addRow = (color, label) => {
+        html += `<div style="display: flex; align-items: center; margin-bottom: 4px;">
+            <div style="width: 14px; height: 14px; background: ${color}; margin-right: 8px; border: 1px solid #999;"></div>
+            <span>${label}</span>
+        </div>`;
+    };
+    if (indicator === "sex_diff") {
+    addRow("#1565c0", "Мужчин больше на >25 тыс.");
+    addRow("#42a5f5", "Мужчин больше на 10–25 тыс.");
+    addRow("#90caf9", "Мужчин больше на 1–10 тыс.");
+    addRow("#f5f5f5", "Почти поровну (±1 тыс.)");
+    addRow("#ffb6b6", "Женщин больше на 1–10 тыс.");
+    addRow("#ff7f7f", "Женщин больше на 10–25 тыс.");
+    addRow("#d32f2f", "Женщин больше на >25 тыс.");
+}
 
-        if (indicator === "urbanization_rate") {
-            addRow("#ccffcc", "≤ 50%");
-            addRow("#99cc99", "≤ 60%");
-            addRow("#669966", "≤ 70%");
-            addRow("#336633", "≤ 80%");
-            addRow("#1f401f", "≤ 90%");
-            addRow("#0d260d", "> 90%");
-        } else if (indicator === "pop25") {
-            addRow("#ffcccc", "≤ 200 тыс.");
-            addRow("#ff9999", "≤ 600 тыс.");
-            addRow("#ff6666", "≤ 1 млн");
-            addRow("#ff3333", "≤ 1.5 млн");
-            addRow("#cc0000", "≤ 4 млн");
-            addRow("#990000", "> 4 млн");
-        } else if (indicator === "dens25") {
-            addRow("#cce5ff", "≤ 2 тыс.");
-            addRow("#99ccff", "≤ 10 тыс.");
-            addRow("#6699ff", "≤ 35 тыс.");
-            addRow("#3366cc", "≤ 70 тыс.");
-            addRow("#663399", "> 70 тыс.");
-        }
-
-        legend.innerHTML = html;
+    if (indicator === "birth25") {
+    addRow("#f5f5f5", "0");            // Нет данных/нулевое значение
+    addRow("#d0e6f6", "≤ 17 523");
+    addRow("#90caf9", "≤ 35 009");
+    addRow("#42a5f5", "≤ 52 495");
+    addRow("#1e88e5", "≤ 69 981");
+    addRow("#1565c0", "≤ 87 467");
+    addRow("#0d47a1", "> 87 467");
+}
+    if (indicator === "urbanization_rate") {
+        addRow("#ccffcc", "≤ 50%");
+        addRow("#99cc99", "≤ 60%");
+        addRow("#669966", "≤ 70%");
+        addRow("#336633", "≤ 80%");
+        addRow("#1f401f", "≤ 90%");
+        addRow("#0d260d", "> 90%");
+    } else if (indicator === "pop25") {
+        addRow("#ffcccc", "≤ 200 тыс.");
+        addRow("#ff9999", "≤ 600 тыс.");
+        addRow("#ff6666", "≤ 1 млн");
+        addRow("#ff3333", "≤ 1.5 млн");
+        addRow("#cc0000", "≤ 4 млн");
+        addRow("#990000", "> 4 млн");
+    } else if (indicator === "dens25") {
+        addRow("#cce5ff", "≤ 2 тыс.");
+        addRow("#99ccff", "≤ 10 тыс.");
+        addRow("#6699ff", "≤ 35 тыс.");
+        addRow("#3366cc", "≤ 70 тыс.");
+        addRow("#663399", "> 70 тыс.");
     }
+    if (["mortal25", "birth_rate_coef", "nat_inc25", "mig_inc25", "tot_inc25"].includes(indicator)) {
+    addRow("#f5f5f5", "≤ 0");
+    addRow("#d0e6f6", "≤ 5");
+    addRow("#90caf9", "≤ 10");
+    addRow("#42a5f5", "≤ 15");
+    addRow("#1e88e5", "≤ 20");
+    addRow("#1565c0", "≤ 30");
+    addRow("#0d47a1", "> 30");
+}
+
+
+    // Добавляем строку "Нет данных"
+    addRow("#ffffff", "Нет данных");
+
+    legend.innerHTML = html;
+}
+
 
     showChartBtn.addEventListener("click", () => {
-        if (!selectedFeature) return;
-        const props = selectedFeature.properties;
-        const years = [2021, 2022, 2023, 2024];
-        const values = years.map(y => props[`nat_pop${String(y).slice(2)}`] || 0);
+    if (!selectedFeature) return;
+    const props = selectedFeature.properties;
+    const years = [2021, 2022, 2023, 2024];
 
-        if (chart) chart.destroy();
-        chart = new Chart(metricChartCanvas.getContext("2d"), {
-            type: "line",
-            data: {
-                labels: years,
-                datasets: [{
-                    label: "Естественный прирост",
-                    data: values,
-                    borderColor: "#4c69ba",
-                    backgroundColor: "rgba(76, 105, 186, 0.2)",
-                    borderWidth: 2,
-                    tension: 0.4,
-                    fill: true
-                }]
-            },
-            options: {
-                responsive: true,
-                plugins: { legend: { position: 'top' } }
-            }
-        });
+    const chartRegionNameDiv = document.getElementById("chartRegionName");
+    chartRegionNameDiv.textContent = props.region || props.NameRegion || "-";
 
-        let tableHTML = '<table><thead><tr><th>Год</th><th>Прирост</th></tr></thead><tbody>';
-        for (let i = 0; i < years.length; i++) {
-            tableHTML += `<tr><td>${years[i]}</td><td>${values[i]}</td></tr>`;
+    const metric = document.getElementById("metricSelect").value;
+
+    // Массив значений для графика по выбранной метрике
+    const values = years.map(y => {
+        const key = `${metric}${String(y).slice(2)}`; // например nat_inc21
+        return props[key] !== undefined ? props[key] : 0;
+    });
+
+    // Название метрики (можно вынести в отдельную функцию или объект, если нужно больше красоты)
+    const metricName = {
+        nat_inc: "Естественный прирост",
+        mig_inc: "Миграционный прирост",
+        tot_inc: "Общий прирост",
+        ur_pop: "Городское население",
+        rur_pop: "Сельское население",
+        male: "Численность мужчин",
+        female: "Численность женщин",
+        birth: "Рождаемость",
+        mortal: "Смертность"
+    }[metric] || "Метрика";
+
+    if (chart) chart.destroy();
+    chart = new Chart(metricChartCanvas.getContext("2d"), {
+        type: "line",
+        data: {
+            labels: years,
+            datasets: [{
+                label: metricName,
+                data: values,
+                borderColor: "#4c69ba",
+                backgroundColor: "rgba(76, 105, 186, 0.2)",
+                borderWidth: 2,
+                tension: 0.4,
+                fill: true
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { position: 'top' } }
         }
-        tableHTML += '</tbody></table>';
-        yearTable.innerHTML = tableHTML;
+    });
 
-        metricModal.style.display = "none";
+    let tableHTML = `<table><thead><tr><th>Год</th><th>${metricName}</th></tr></thead><tbody>`;
+    for (let i = 0; i < years.length; i++) {
+        tableHTML += `<tr><td>${years[i]}</td><td>${values[i]}</td></tr>`;
+    }
+    tableHTML += '</tbody></table>';
+    yearTable.innerHTML = tableHTML;
+
+    metricModal.style.display = "none";
+});
+
+
+
+
+
+        // --- Новый функционал ниже ---
+    const showDataTableBtn = document.getElementById("showDataTable");
+    const dataTableDiv = document.getElementById("table");
+
+    const indicatorYearNote = document.getElementById("indicatorYearNote");
+    const growthIndicators = ["nat_inc24", "mig_inc24", "tot_inc24"];
+
+    // Скрывать таблицу при каждом обновлении показателя
+    indicatorSelect.addEventListener("change", () => {
+        dataTableDiv.innerHTML = "";
+        showDataTableBtn.textContent = "Показать таблицу данных";
+        if (growthIndicators.includes(indicatorSelect.value)) {
+        indicatorYearNote.style.display = "block";
+        indicatorYearNote.textContent = "Данные за 2024 год";
+    } else {
+        indicatorYearNote.style.display = "none";
+        indicatorYearNote.textContent = "";
+    }
+    });
+
+    function renderDataTable() {
+    const selectedIndicator = indicatorSelect.value;
+    let html = '';
+    let headers = [];
+    // Сортировка для всех метрик
+    let sortedFeatures = [...geoData].sort((a, b) => {
+        let valA, valB;
+        if (selectedIndicator === "sex_diff") {
+            valA = (a.properties["female25"] || 0) - (a.properties["male25"] || 0);
+            valB = (b.properties["female25"] || 0) - (b.properties["male25"] || 0);
+        } else if (selectedIndicator === "birth_rate_coef") {
+            const aBirth = Number(a.properties["birth25"] || 0), aMortal = Number(a.properties["mortal25"] || 0);
+            const bBirth = Number(b.properties["birth25"] || 0), bMortal = Number(b.properties["mortal25"] || 0);
+            valA = aMortal > 0 ? aBirth / aMortal : 0;
+            valB = bMortal > 0 ? bBirth / bMortal : 0;
+        } else {
+            valA = Number(a.properties[selectedIndicator] || 0);
+            valB = Number(b.properties[selectedIndicator] || 0);
+        }
+        return valB - valA;
+    });
+
+    // --- Кастомная таблица для sex_diff ---
+    if (selectedIndicator === "sex_diff") {
+        headers = ["Регион", "Женщин", "Мужчин", "Разница"];
+        html = `<table><thead><tr>`;
+        headers.forEach(h => html += `<th>${h}</th>`);
+        html += `</tr></thead><tbody>`;
+        sortedFeatures.forEach(feature => {
+            const props = feature.properties;
+            const female = props["female25"] || 0;
+            const male = props["male25"] || 0;
+            const diff = female - male;
+            html += `<tr>`;
+            html += `<td>${props.region || props.NameRegion || "-"}</td>`;
+            html += `<td>${female}</td>`;
+            html += `<td>${male}</td>`;
+            html += `<td>${diff}</td>`;
+            html += `</tr>`;
+        });
+        html += `</tbody></table>`;
+        dataTableDiv.innerHTML = html;
+        return; // <--- ВАЖНО! Останавливаем функцию, чтобы не шла дальше
+    }
+
+    // --- Стандартная таблица для остальных метрик ---
+    headers = ["Регион"];
+    switch (selectedIndicator) {
+        case "pop25": headers.push("Население"); break;
+        case "urbanization_rate": headers.push("Уровень урбанизации (%)"); break;
+        case "dens25": headers.push("Плотность населения"); break;
+        case "birth25": headers.push("Рождаемость"); break;
+        case "mortal25": headers.push("Смертность"); break;
+        case "birth_rate_coef": headers.push("Коэффициент рождаемости"); break;
+        case "nat_inc24": headers.push("Естественный прирост (2024)"); break;
+        case "mig_inc24": headers.push("Миграционный прирост (2024)"); break;
+        case "tot_inc24": headers.push("Общий прирост (2024)"); break;
+        default: headers.push(selectedIndicator);
+    }
+    html = `<table><thead><tr>`;
+    headers.forEach(h => html += `<th>${h}</th>`);
+    html += `</tr></thead><tbody>`;
+    sortedFeatures.forEach(feature => {
+        const props = feature.properties;
+        html += `<tr>`;
+        html += `<td>${props.region || props.NameRegion || "-"}</td>`;
+        let value;
+        if (selectedIndicator === "birth_rate_coef") {
+            const birth = Number(props["birth25"] || 0);
+            const mortal = Number(props["mortal25"] || 0);
+            value = mortal > 0 ? +(birth / mortal).toFixed(2) : 0;
+        } else {
+            value = props[selectedIndicator] || 0;
+        }
+        html += `<td>${value}</td>`;
+        html += `</tr>`;
+    });
+    html += `</tbody></table>`;
+    dataTableDiv.innerHTML = html;
+}
+
+
+
+    // Переключение: показать/скрыть таблицу
+    let tableVisible = false;
+    showDataTableBtn.addEventListener("click", () => {
+        if (tableVisible) {
+            dataTableDiv.innerHTML = "";
+            showDataTableBtn.textContent = "Показать таблицу данных";
+            tableVisible = false;
+        } else {
+            renderDataTable();
+            showDataTableBtn.textContent = "Скрыть таблицу";
+            tableVisible = true;
+        }
     });
 </script>
 </body>
